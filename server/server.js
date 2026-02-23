@@ -6,12 +6,11 @@ import multer from 'multer';
 
 import analysisRoutes from './routes/analysis.js';
 import pkg from "@google/generative-ai/package.json" assert { type: "json" };
-console.log("RUNTIME GEMINI SDK VERSION:", pkg.version);
-console.log("SDK version:", pkg.version);
-console.log("Model being requested:", 'gemini-1.5-flash-latest');
-console.log("Function reached → predictCareerPathWithAI")
 
 dotenv.config();
+const geminiModelPreference = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+console.log("Gemini SDK version:", pkg.version);
+console.log("Gemini model preference:", geminiModelPreference);
 
 // Initialize Express app
 const app = express();
@@ -46,7 +45,7 @@ const PORT = process.env.PORT || 5000;
 
 mongoose.connect(MONGODB_URI)
     .then(() => {
-        console.log('✅ Connected to MongoDB');
+        console.log('Connected to MongoDB');
 
         // Start server
         app.listen(PORT, () => {
@@ -67,3 +66,4 @@ process.on('SIGINT', async () => {
     console.log('MongoDB connection closed');
     process.exit(0);
 });
+

@@ -62,16 +62,21 @@ export function normalizeSkills(skills) {
 
     const fuse = new Fuse(CANONICAL_SKILLS, {
         includeScore: true,
-        threshold: 0.3, // Lower threshold means stricter matching
+        threshold: 0.2,
     });
 
     const normalized = new Set();
+    const SKILL_STOPWORDS = new Set([
+        'skill', 'skills', 'experience', 'project', 'projects', 'work', 'built', 'build',
+        'developed', 'using', 'with', 'and', 'the', 'for', 'to', 'in'
+    ]);
 
     skills.forEach(skill => {
         if (!skill || typeof skill !== 'string') return;
 
         const trimmedSkill = skill.trim();
         if (trimmedSkill.length < 2) return;
+        if (SKILL_STOPWORDS.has(trimmedSkill.toLowerCase())) return;
 
         // Direct match check (case-insensitive)
         const directMatch = CANONICAL_SKILLS.find(s => s.toLowerCase() === trimmedSkill.toLowerCase());
@@ -82,11 +87,8 @@ export function normalizeSkills(skills) {
 
         // Fuzzy match
         const result = fuse.search(trimmedSkill);
-        if (result.length > 0) {
+        if (result.length > 0 && typeof result[0].score === 'number' && result[0].score <= 0.2) {
             normalized.add(result[0].item);
-        } else {
-            // Keep original if no match found, but capitalized nicely
-            normalized.add(trimmedSkill.charAt(0).toUpperCase() + trimmedSkill.slice(1));
         }
     });
 

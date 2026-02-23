@@ -11,19 +11,44 @@ import ExportMenu from './ExportMenu';
 const AnalysisResult = ({ analysis, onSave, saving, readOnly = false, reportId }) => {
     if (!analysis) return null;
 
-    const { summary, strengths, weaknesses, missingSkills, atsScore, suggestions, careerPath, qualityScore, uniqueness, details } = analysis;
+    const {
+        summary,
+        strengths,
+        weaknesses,
+        missingSkills,
+        areasForImprovement,
+        suggestions,
+        atsScore,
+        careerPath,
+        qualityScore,
+        uniqueness,
+        details
+    } = analysis;
+
+    const asList = (value) => Array.isArray(value)
+        ? value.filter((item) => typeof item === 'string' && item.trim().length > 0)
+        : [];
+
+    const NON_CORE_SKILL_TERMS = new Set([
+        'javascript', 'typescript', 'python', 'java', 'c++', 'c#', 'go', 'rust', 'swift', 'kotlin',
+        'react', 'react.js', 'vue.js', 'angular', 'next.js', 'node.js', 'django', 'flask', 'spring boot'
+    ]);
+    const isCoreSkill = (value) => !NON_CORE_SKILL_TERMS.has(String(value || '').trim().toLowerCase());
+
+    const strengthList = asList(strengths);
+    const weaknessList = asList(weaknesses);
+    const missingSkillsList = asList(missingSkills).filter(isCoreSkill);
+    const detectedSkillsList = asList(details?.normalizedSkills).filter(isCoreSkill);
+    const improvementList = asList(areasForImprovement);
+    const suggestionList = asList(suggestions);
+    const visibleImprovements = improvementList.length > 0 ? improvementList : weaknessList;
+    const visibleSuggestions = suggestionList.length > 0 ? suggestionList : visibleImprovements.slice(0, 5);
 
     // Determine ATS score color and status
     const getScoreColor = (score) => {
         if (score >= 80) return 'text-green-600';
         if (score >= 60) return 'text-yellow-600';
         return 'text-red-600';
-    };
-
-    const getScoreBg = (score) => {
-        if (score >= 80) return 'bg-green-500';
-        if (score >= 60) return 'bg-yellow-500';
-        return 'bg-red-500';
     };
 
     const getScoreLabel = (score) => {
@@ -124,7 +149,8 @@ const AnalysisResult = ({ analysis, onSave, saving, readOnly = false, reportId }
                     <div className="card">
                         <SkillChart
                             matchedSkills={details?.matchedTechSkills || []}
-                            missingSkills={missingSkills}
+                            missingSkills={missingSkillsList}
+                            allDetectedSkills={detectedSkillsList}
                         />
                     </div>
 
@@ -145,10 +171,10 @@ const AnalysisResult = ({ analysis, onSave, saving, readOnly = false, reportId }
                                         </h4>
                                         <div className="text-sm text-gray-600 space-y-1">
                                             {details.entities?.emails?.length > 0 ? (
-                                                details.entities.emails.map((email, i) => <div key={i}>📧 {email}</div>)
+                                                details.entities.emails.map((email, i) => <div key={i}>Email: {email}</div>)
                                             ) : <div className="text-gray-400">No email found</div>}
                                             {details.entities?.phones?.length > 0 ? (
-                                                details.entities.phones.map((phone, i) => <div key={i}>📱 {phone}</div>)
+                                                details.entities.phones.map((phone, i) => <div key={i}>Phone: {phone}</div>)
                                             ) : <div className="text-gray-400">No phone found</div>}
                                         </div>
                                     </div>
@@ -172,8 +198,8 @@ const AnalysisResult = ({ analysis, onSave, saving, readOnly = false, reportId }
                                         <FiList className="text-blue-500" /> Detected Skills
                                     </h4>
                                     <div className="flex flex-wrap gap-2">
-                                        {details.normalizedSkills?.length > 0 ? (
-                                            details.normalizedSkills.slice(0, 20).map((skill, i) => (
+                                        {detectedSkillsList.length > 0 ? (
+                                            detectedSkillsList.slice(0, 20).map((skill, i) => (
                                                 <span key={i} className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
                                                     {skill}
                                                 </span>
@@ -202,48 +228,58 @@ const AnalysisResult = ({ analysis, onSave, saving, readOnly = false, reportId }
                         Strengths
                     </h3>
                     <ul className="space-y-2">
-                        {strengths.map((strength, index) => (
+                        {strengthList.length > 0 ? strengthList.map((strength, index) => (
                             <li key={index} className="flex items-start gap-2 text-gray-700">
-                                <span className="text-green-600 mt-1">✓</span>
+                                <span className="text-green-600 mt-1">-</span>
                                 <span>{strength}</span>
                             </li>
-                        ))}
+                        )) : (
+                            <li className="text-gray-600">No strengths were extracted from this analysis.</li>
+                        )}
                     </ul>
                 </div>
 
-                {/* Weaknesses */}
+                {/* Areas for Improvement */}
                 <div className="card bg-red-50 border border-red-200">
                     <h3 className="text-xl font-bold text-red-800 mb-4 flex items-center gap-2">
                         <FiXCircle />
                         Areas for Improvement
                     </h3>
                     <ul className="space-y-2">
-                        {weaknesses.map((weakness, index) => (
+                        {visibleImprovements.length > 0 ? visibleImprovements.map((item, index) => (
                             <li key={index} className="flex items-start gap-2 text-gray-700">
-                                <span className="text-red-600 mt-1">✗</span>
-                                <span>{weakness}</span>
+                                <span className="text-red-600 mt-1">-</span>
+                                <span>{item}</span>
                             </li>
-                        ))}
+                        )) : (
+                            <li className="text-gray-600">
+                                No major gaps were detected. Add more job-specific keywords to improve ATS alignment.
+                            </li>
+                        )}
                     </ul>
                 </div>
             </div>
 
             {/* Missing Skills */}
-            {missingSkills.length > 0 && (
-                <div className="card bg-yellow-50 border border-yellow-200">
-                    <h3 className="text-xl font-bold text-yellow-800 mb-4 flex items-center gap-2">
-                        <FiAlertCircle />
-                        Missing Skills
-                    </h3>
+            <div className="card bg-yellow-50 border border-yellow-200">
+                <h3 className="text-xl font-bold text-yellow-800 mb-4 flex items-center gap-2">
+                    <FiAlertCircle />
+                    Missing Skills
+                </h3>
+                {missingSkillsList.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
-                        {missingSkills.map((skill, index) => (
+                        {missingSkillsList.map((skill, index) => (
                             <span key={index} className="badge-warning capitalize">
                                 {skill}
                             </span>
                         ))}
                     </div>
-                </div>
-            )}
+                ) : (
+                    <p className="text-gray-600">
+                        No critical missing skills detected for this job description.
+                    </p>
+                )}
+            </div>
 
             {/* Suggestions */}
             <div className="card bg-blue-50 border border-blue-200">
@@ -251,14 +287,16 @@ const AnalysisResult = ({ analysis, onSave, saving, readOnly = false, reportId }
                     Recommendations
                 </h3>
                 <ul className="space-y-3">
-                    {suggestions.map((suggestion, index) => (
+                    {visibleSuggestions.length > 0 ? visibleSuggestions.map((suggestion, index) => (
                         <li key={index} className="flex items-start gap-3 text-gray-700">
                             <span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0 text-sm font-bold mt-0.5">
                                 {index + 1}
                             </span>
                             <span>{suggestion}</span>
                         </li>
-                    ))}
+                    )) : (
+                        <li className="text-gray-600">No additional recommendations available.</li>
+                    )}
                 </ul>
             </div>
         </div>

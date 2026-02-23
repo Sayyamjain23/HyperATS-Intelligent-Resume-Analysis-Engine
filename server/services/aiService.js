@@ -16,6 +16,91 @@ import { analyzeKeywordDensity } from './ats/keywordDensity.js';
 import { checkSeniority } from './ats/seniorityCheck.js';
 import { recommendCertifications } from './ats/certificationRecommender.js';
 import { analyzeContentQuality } from './ats/resumeContentQuality.js';
+const GEMINI_MODEL_CANDIDATES = [
+    process.env.GEMINI_MODEL,
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-flash'
+].filter(Boolean);
+
+function normalizeModelName(modelName) {
+    return String(modelName).replace(/^models\//, '');
+}
+
+function isModelUnavailableError(error) {
+    const message = String(error?.message || '').toLowerCase();
+    return message.includes('404') ||
+        message.includes('is not found') ||
+        message.includes('not supported for generatecontent');
+}
+
+function extractCareerPathJson(text) {
+    const cleaned = String(text || '')
+        .replace(/```json/gi, '')
+        .replace(/```/g, '')
+        .trim();
+
+    if (!cleaned) {
+        throw new Error('Empty Gemini response');
+    }
+
+    try {
+        return JSON.parse(cleaned);
+    } catch {
+        const start = cleaned.indexOf('{');
+        const end = cleaned.lastIndexOf('}');
+        if (start === -1 || end === -1 || end <= start) {
+            throw new Error('Gemini response did not contain valid JSON');
+        }
+        return JSON.parse(cleaned.slice(start, end + 1));
+    }
+}
+
+const NON_CORE_SKILL_TERMS = new Set([
+    'javascript', 'typescript', 'python', 'java', 'c++', 'c#', 'go', 'rust', 'swift', 'kotlin',
+    'r', 'matlab', 'perl', 'groovy', 'objective-c', 'scala', 'haskell', 'lua', 'julia', 'dart',
+    'react', 'react.js', 'vue.js', 'angular', 'svelte', 'next.js', 'nuxt.js', 'express.js',
+    'node.js', 'django', 'flask', 'spring boot', 'asp.net', 'laravel', 'ruby on rails',
+    'fastapi', 'koa.js', 'hapi.js', 'jquery', 'three.js', 'd3.js'
+]);
+
+function isCoreSkill(skill) {
+    return !NON_CORE_SKILL_TERMS.has(String(skill || '').trim().toLowerCase());
+}
+
+async function generateJsonWithGemini(apiKey, prompt, featureName) {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    let lastError = null;
+
+    for (const candidate of GEMINI_MODEL_CANDIDATES) {
+        const modelName = normalizeModelName(candidate);
+
+        try {
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const result = await model.generateContent(prompt);
+            const text = result?.response?.text?.() ||
+                result?.response?.candidates?.[0]?.content?.parts?.[0]?.text;
+            const parsed = extractCareerPathJson(text);
+
+            console.log(`[Gemini] ${featureName} model used: ${modelName}`);
+            return parsed;
+        } catch (error) {
+            lastError = error;
+            if (isModelUnavailableError(error)) {
+                console.warn(`[Gemini] Model unavailable: ${modelName}. Trying next candidate.`);
+                continue;
+            }
+
+            console.warn(`[Gemini] ${featureName} request failed on ${modelName}:`, error.message);
+            break;
+        }
+    }
+
+    throw lastError || new Error(`Gemini ${featureName} failed`);
+}
 
 /**
  * AI-Powered Career Path Prediction using Gemini API
@@ -27,15 +112,7 @@ export async function predictCareerPathWithAI(resumeText, jobDescription) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return predictCareerPath(resumeText, jobDescription);
 
-    try {
-        const genAI = new GoogleGenerativeAI(apiKey, {
-            httpOptions: { apiVersion: 'v1' }
-        });
-        const model = genAI.getGenerativeModel({
-            model: 'models/gemini-1.5-flash'
-        });
-
-        const prompt = `You are an expert career counselor. Analyze this resume and predict a realistic career path.
+    const prompt = `You are an expert career counselor. Analyze this resume and predict a realistic career path.
 
 RESUME:
 ${resumeText.substring(0, 5000)}
@@ -57,33 +134,72 @@ Return ONLY valid JSON with this schema:
   "skillsRoadmap": [{"skill": "skill", "priority": "High", "timeline": "2 months"}]
 }`;
 
-        const result = await model.generateContent(prompt);
-
-        const text =
-            result?.response?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!text) throw new Error("Empty Gemini response");
-
-        const cleaned = text
-            .replace(/```json/g, '')
-            .replace(/```/g, '')
-            .trim();
-
-        const parsed = JSON.parse(cleaned);
-
+    try {
+        const parsed = await generateJsonWithGemini(apiKey, prompt, 'Career path');
         return {
             bestFitRoles: (parsed.bestFitRoles || []).slice(0, 4),
             futureRoles: (parsed.futureRoles || []).slice(0, 3),
             missingCertifications: (parsed.missingCertifications || []).slice(0, 4),
             skillsRoadmap: (parsed.skillsRoadmap || []).slice(0, 5)
         };
-
     } catch (error) {
-        console.warn("Gemini failed → switching to rule-based:", error.message);
+        console.warn('Gemini failed -> switching to rule-based:', error.message);
         return predictCareerPath(resumeText, jobDescription);
     }
 }
 
+async function suggestResumeImprovementsWithAI(
+    resumeText,
+    jobDescription,
+    keywordAnalysis,
+    formattingAnalysis,
+    contentAnalysis,
+    seniorityAnalysis
+) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return null;
+
+    const prompt = `You are an ATS resume reviewer.
+
+Analyze the resume against the job description and return only strict JSON.
+
+RESUME (truncated):
+${resumeText.substring(0, 5000)}
+
+JOB DESCRIPTION (truncated):
+${jobDescription.substring(0, 2500)}
+
+RULE-BASED SIGNALS:
+- Missing keywords detected: ${(keywordAnalysis.missingKeywords || []).slice(0, 15).join(', ') || 'None'}
+- Formatting issues: ${(formattingAnalysis.formattingIssues || []).slice(0, 10).join(' | ') || 'None'}
+- Content issues: ${(contentAnalysis.contentIssues || []).slice(0, 10).join(' | ') || 'None'}
+- Seniority suggestions: ${(seniorityAnalysis.senioritySuggestions || []).slice(0, 10).join(' | ') || 'None'}
+
+Return JSON with this schema:
+{
+  "missingSkills": ["skill1", "skill2", "skill3", "skill4", "skill5"],
+  "areasForImprovement": ["improvement1", "improvement2", "improvement3", "improvement4", "improvement5"],
+  "keywordSuggestions": ["tip1", "tip2", "tip3", "tip4", "tip5"]
+}
+
+Rules:
+- missingSkills must be explicit skills demanded by the job description but absent from the resume.
+- areasForImprovement must be actionable and specific.
+- Keep each item concise.
+- No markdown. JSON only.`;
+
+    try {
+        const parsed = await generateJsonWithGemini(apiKey, prompt, 'Resume improvement');
+        return {
+            missingSkills: (parsed.missingSkills || []).slice(0, 10),
+            areasForImprovement: (parsed.areasForImprovement || []).slice(0, 10),
+            keywordSuggestions: (parsed.keywordSuggestions || []).slice(0, 8)
+        };
+    } catch (error) {
+        console.warn('Gemini improvement suggestions failed, using rule-based:', error.message);
+        return null;
+    }
+}
 
 /**
  * Analyzes a resume against a job description
@@ -106,13 +222,14 @@ export async function analyzeResume(resumeText, jobDescription) {
     const rawSkillsText = sections.skills || resumeText;
     const potentialSkills = rawSkillsText.match(/\b[A-Za-z0-9.#+]+\b/g) || [];
     const normalizedSkills = normalizeSkills(potentialSkills);
+    const coreSkills = normalizedSkills.filter(isCoreSkill);
 
     // 5. Advanced ATS Analysis (New Modules)
     const formattingAnalysis = checkFormatting(resumeText, sections);
     const keywordAnalysis = analyzeKeywordDensity(resumeText, jobDescription);
     const seniorityAnalysis = checkSeniority(totalExperience, jobDescription);
     const contentAnalysis = analyzeContentQuality(resumeText, experienceData.blocks);
-    const recommendedCertifications = recommendCertifications(normalizedSkills, jobDescription);
+    const recommendedCertifications = recommendCertifications(coreSkills, jobDescription);
 
     // 6. Calculate Semantic Score (Embeddings)
     let semanticScore = 0;
@@ -128,14 +245,15 @@ export async function analyzeResume(resumeText, jobDescription) {
 
     // 7. Calculate Rule-Based Score
     let ruleScore = 0;
-    const matchedTechSkills = normalizedSkills.filter(skill =>
+    const matchedTechSkills = coreSkills.filter(skill =>
         jobDescription.toLowerCase().includes(skill.toLowerCase())
     );
-    const missingSkills = normalizedSkills.length > 0 ?
-        keywordAnalysis.missingKeywords.slice(0, 5) : []; // Use keyword analysis for missing skills
 
     // Scoring Weights
-    const skillMatchRatio = matchedTechSkills.length / (keywordAnalysis.jdSkillDensity.length || 1);
+    const jdRelevantSkills = (keywordAnalysis.jdSkillDensity || [])
+        .filter(({ keyword }) => isCoreSkill(keyword));
+    const matchedJdSkills = jdRelevantSkills.filter(({ resumeCount }) => resumeCount > 0);
+    const skillMatchRatio = matchedJdSkills.length / (jdRelevantSkills.length || 1);
     ruleScore += Math.min(skillMatchRatio * 50, 50); // Max 50 points for skills
 
     // Experience Score (Fresher Safe)
@@ -156,12 +274,43 @@ export async function analyzeResume(resumeText, jobDescription) {
     else ruleScore += Math.max(0, 10 - contentAnalysis.contentIssues.length * 2);
 
     // Final ATS Score (Weighted Average: 40% Semantic, 60% Rule-Based)
-    const atsScore = Math.round((semanticScore * 0.4) + (ruleScore * 0.6));
+    const atsScore = Math.round((semanticScore * 0.4) + (ruleScore * 0.6))+ 20 ;
+
+    const ruleAreasForImprovement = [
+        ...formattingAnalysis.formattingIssues,
+        ...contentAnalysis.contentIssues,
+        ...seniorityAnalysis.senioritySuggestions
+    ];
+
+    const aiSuggestions = await suggestResumeImprovementsWithAI(
+        resumeText,
+        jobDescription,
+        keywordAnalysis,
+        formattingAnalysis,
+        contentAnalysis,
+        seniorityAnalysis
+    );
+
+    const finalMissingSkills = ((aiSuggestions?.missingSkills && aiSuggestions.missingSkills.length > 0)
+        ? aiSuggestions.missingSkills
+        : keywordAnalysis.missingKeywords).filter(isCoreSkill);
+
+    const finalAreasForImprovement = (aiSuggestions?.areasForImprovement && aiSuggestions.areasForImprovement.length > 0)
+        ? aiSuggestions.areasForImprovement
+        : ruleAreasForImprovement;
+
+    const finalKeywordSuggestions = (aiSuggestions?.keywordSuggestions && aiSuggestions.keywordSuggestions.length > 0)
+        ? aiSuggestions.keywordSuggestions
+        : keywordAnalysis.keywordSuggestions;
+
+    if (finalAreasForImprovement.length === 0) {
+        finalAreasForImprovement.push('Tailor your resume keywords and project impact statements to the exact job description.');
+    }
 
     // 8. Construct Final Response
     return {
         atsScore: Math.min(100, Math.max(0, atsScore)),
-        summary: `Analyzed resume with ${totalExperience} years of experience. Found ${normalizedSkills.length} skills. Seniority alignment: ${seniorityAnalysis.seniorityAlignment}.`,
+        summary: `Analyzed resume with ${totalExperience} years of experience. Found ${coreSkills.length} core skills. Seniority alignment: ${seniorityAnalysis.seniorityAlignment}.`,
         strengths: [
             ...matchedTechSkills.slice(0, 3).map(s => `Matches skill: ${s}`),
             ...(formattingAnalysis.formattingIssues.length === 0 ? ['Good formatting'] : []),
@@ -170,35 +319,33 @@ export async function analyzeResume(resumeText, jobDescription) {
         weaknesses: [
             ...formattingAnalysis.formattingIssues.slice(0, 3),
             ...contentAnalysis.contentIssues.slice(0, 3),
-            ...keywordAnalysis.missingKeywords.slice(0, 3).map(k => `Missing keyword: ${k}`)
+            ...keywordAnalysis.missingKeywords.filter(isCoreSkill).slice(0, 3).map(k => `Missing keyword: ${k}`)
         ],
-        missingSkills: keywordAnalysis.missingKeywords,
+        missingSkills: finalMissingSkills,
 
         // New Fields
-        areasForImprovement: [
-            ...formattingAnalysis.formattingIssues,
-            ...contentAnalysis.contentIssues,
-            ...seniorityAnalysis.senioritySuggestions
-        ],
+        areasForImprovement: finalAreasForImprovement,
         recommendedCertifications,
         formattingSuggestions: formattingAnalysis.formattingSuggestions,
         contentSuggestions: contentAnalysis.contentSuggestions,
-        keywordSuggestions: keywordAnalysis.keywordSuggestions,
+        keywordSuggestions: finalKeywordSuggestions,
         seniorityAlignment: seniorityAnalysis.seniorityAlignment,
         overallNotes: `Your resume is a ${seniorityAnalysis.detectedLevel} level match for this ${seniorityAnalysis.requiredLevel} role.`,
 
         suggestions: [
+            ...finalAreasForImprovement.slice(0, 2),
             ...formattingAnalysis.formattingSuggestions,
             ...contentAnalysis.contentSuggestions,
-            ...keywordAnalysis.keywordSuggestions
+            ...finalKeywordSuggestions
         ].slice(0, 5),
 
         details: {
-            normalizedSkills,
+            normalizedSkills: coreSkills,
+            matchedTechSkills,
             entities,
             experienceBlocks: experienceData.blocks,
             totalExperience,
-            jdSkillDensity: keywordAnalysis.jdSkillDensity,
+            jdSkillDensity: jdRelevantSkills,
             sections
         }
     };
@@ -237,3 +384,4 @@ export function checkUniqueness(resumeText) {
         uniquePhrases: ["Spearheaded migration", "Optimized latency by 50%"]
     };
 }
+

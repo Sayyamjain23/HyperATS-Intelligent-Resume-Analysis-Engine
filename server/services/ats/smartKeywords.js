@@ -48,6 +48,14 @@ const TECHNICAL_PHRASES = [
     'git', 'bash', 'linux'
 ];
 
+const ALLOWED_SINGLE_KEYWORDS = new Set([
+    'docker', 'kubernetes', 'terraform', 'jenkins', 'git', 'linux', 'bash',
+    'aws', 'azure', 'gcp', 'sql', 'mysql', 'postgresql', 'mongodb', 'nosql',
+    'python', 'java', 'javascript', 'typescript', 'c++', 'go', 'rust',
+    'react', 'angular', 'vue', 'node', 'express', 'django', 'flask', 'spring',
+    'microservices', 'serverless', 'graphql', 'redis', 'elasticsearch'
+]);
+
 const tokenizer = new natural.WordTokenizer();
 
 export function analyzeSmartKeywords(resumeText, jobDescription) {
@@ -61,7 +69,7 @@ export function analyzeSmartKeywords(resumeText, jobDescription) {
             .map(t => t.toLowerCase());
 
         return stopword
-            .removeStopwords(tokens, [...stopword.en, ...HR_STOPWORDS])
+            .removeStopwords(tokens, [...stopword.eng, ...HR_STOPWORDS])
             .filter(t => t.length > 2); // no single chars
     };
 
@@ -78,7 +86,7 @@ export function analyzeSmartKeywords(resumeText, jobDescription) {
     const tokenFreq = {};
 
     tokens.forEach(t => {
-        if (!TECHNICAL_PHRASES.includes(t))
+        if (!TECHNICAL_PHRASES.includes(t) && ALLOWED_SINGLE_KEYWORDS.has(t))
             tokenFreq[t] = (tokenFreq[t] || 0) + 1;
     });
 

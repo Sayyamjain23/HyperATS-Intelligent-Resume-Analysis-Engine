@@ -98,7 +98,7 @@ const QualityScore = ({ qualityScore }) => {
                     <ul className="space-y-2">
                         {feedback.map((item, index) => (
                             <li key={index} className="flex items-start gap-2 text-gray-700">
-                                <span className="text-yellow-600 font-bold mt-1">•</span>
+                                <span className="text-yellow-600 font-bold mt-1"></span>
                                 <span>{item}</span>
                             </li>
                         ))}
