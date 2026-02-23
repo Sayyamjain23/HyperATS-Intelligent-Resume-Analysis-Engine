@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 
 import analysisRoutes from './routes/analysis.js';
-import pkg from "@google/generative-ai/package.json" assert { type: "json" };
+import pkg from "@google/generative-ai/package.json" with { type: "json" };
 
 dotenv.config();
 const geminiModelPreference = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
